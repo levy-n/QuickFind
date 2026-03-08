@@ -1,0 +1,215 @@
+<Window x:Class="QuickFind.SearchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:QuickFind"
+        Title="QuickFind"
+        Width="750" Height="550"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="True"
+        Topmost="True"
+        ResizeMode="NoResize">
+
+    <Window.Resources>
+        <!-- Result item template -->
+        <DataTemplate x:Key="ResultTemplate">
+            <Grid Margin="2,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="36"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Icon -->
+                <Border Grid.Column="0" Width="28" Height="28"
+                        CornerRadius="6" VerticalAlignment="Center"
+                        Background="{Binding IconBackground}">
+                    <Image Source="{Binding Icon}" Width="18" Height="18"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                </Border>
+
+                <!-- Name + Path -->
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                    <TextBlock FontSize="13" FontFamily="Segoe UI">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource TextBrightBrush}"/>
+                            </Style>
+                        </TextBlock.Style>
+                        <Run Text="{Binding Name, Mode=OneTime}" FontWeight="SemiBold"/>
+                        <Run Text="{Binding Extension, Mode=OneTime}"
+                             Foreground="{StaticResource TextDimBrush}" FontWeight="Normal"/>
+                    </TextBlock>
+                    <TextBlock Text="{Binding ShortDirectory, Mode=OneTime}"
+                               Foreground="{StaticResource TextDimBrush}"
+                               FontSize="11" FontFamily="Segoe UI"
+                               TextTrimming="CharacterEllipsis" MaxWidth="450"
+                               HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Size + Type badge -->
+                <StackPanel Grid.Column="2" VerticalAlignment="Center"
+                            HorizontalAlignment="Right" Margin="8,0,0,0">
+                    <TextBlock Text="{Binding SizeText, Mode=OneTime}"
+                               Foreground="{StaticResource TextDimBrush}"
+                               FontSize="11" HorizontalAlignment="Right"/>
+                    <Border CornerRadius="3" Padding="5,1" Margin="0,2,0,0"
+                            HorizontalAlignment="Right"
+                            Background="{Binding TypeBadgeBackground}"
+                            Visibility="{Binding TypeBadgeVisibility}">
+                        <TextBlock Text="{Binding TypeBadge, Mode=OneTime}"
+                                   FontSize="9" FontWeight="SemiBold"
+                                   Foreground="White"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Border Background="{StaticResource BgBrush}"
+            BorderBrush="{StaticResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="12"
+            Margin="12"
+            Effect="{StaticResource WindowShadow}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Search box + close/exit buttons -->
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="SearchBox"
+                         Grid.Column="0"
+                         Style="{StaticResource SearchTextBox}"
+                         TextChanged="SearchBox_TextChanged"
+                         PreviewKeyDown="SearchBox_PreviewKeyDown"/>
+
+                <!-- Close + Exit buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,6,0">
+                    <!-- Hide (minimize to tray) -->
+                    <Button Content="&#x2015;" ToolTip="Hide  (Esc)"
+                            Click="HideButton_Click"
+                            Style="{StaticResource WindowControlButton}"/>
+                    <!-- Exit app -->
+                    <Button Content="&#x2715;" ToolTip="Exit QuickFind"
+                            Click="ExitButton_Click"
+                            Style="{StaticResource WindowControlButtonClose}"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- Filters bar: drives + size -->
+            <Border Grid.Row="1" Background="{StaticResource SurfaceBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="12,7">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Drive selector -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Drive:"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   FontSize="11.5" FontFamily="Segoe UI"
+                                   VerticalAlignment="Center" Margin="4,0,8,0"/>
+                        <StackPanel x:Name="DriveButtonsPanel" Orientation="Horizontal"/>
+                    </StackPanel>
+
+                    <!-- Separator -->
+                    <Border Grid.Column="1" Width="1" Margin="12,2"
+                            Background="{StaticResource BorderBrush}"/>
+
+                    <!-- Size filter -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Size:"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   FontSize="11.5" FontFamily="Segoe UI"
+                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <Button Content="> 100 MB" Tag=">100MB"
+                                Click="SizeFilter_Click"
+                                Style="{StaticResource SizeFilterButton}"/>
+                        <Button Content="> 500 MB" Tag=">500MB"
+                                Click="SizeFilter_Click"
+                                Style="{StaticResource SizeFilterButton}"/>
+                        <Button Content="> 1 GB" Tag=">1GB"
+                                Click="SizeFilter_Click"
+                                Style="{StaticResource SizeFilterButton}"/>
+                        <Button Content="> 5 GB" Tag=">5GB"
+                                Click="SizeFilter_Click"
+                                Style="{StaticResource SizeFilterButton}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Results -->
+            <ListBox x:Name="ResultsList"
+                     Grid.Row="2"
+                     Style="{StaticResource ResultsListBox}"
+                     ItemContainerStyle="{StaticResource ResultItemContainer}"
+                     ItemTemplate="{StaticResource ResultTemplate}"
+                     MouseDoubleClick="ResultsList_MouseDoubleClick"
+                     PreviewKeyDown="ResultsList_KeyDown"
+                     PreviewMouseRightButtonUp="ResultsList_RightClick"
+                     SelectionMode="Single"/>
+
+            <!-- Empty state -->
+            <StackPanel x:Name="EmptyState" Grid.Row="2"
+                        VerticalAlignment="Center" HorizontalAlignment="Center"
+                        Visibility="Visible">
+                <TextBlock Text="&#x1F50D;" FontSize="40" HorizontalAlignment="Center" Opacity="0.2"/>
+                <TextBlock x:Name="EmptyStateText"
+                           Text="Start typing to search..."
+                           Foreground="{StaticResource TextDimBrush}"
+                           FontSize="14" HorizontalAlignment="Center" Margin="0,8,0,0"
+                           TextAlignment="Center"/>
+            </StackPanel>
+
+            <!-- Status bar -->
+            <Border Grid.Row="3" Background="{StaticResource SurfaceBrush}"
+                    CornerRadius="0,0,12,12" Padding="0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="StatusText"
+                               Grid.Column="0"
+                               Style="{StaticResource StatusText}"/>
+
+                    <TextBlock Grid.Column="1"
+                               Style="{StaticResource StatusText}"
+                               Foreground="{StaticResource TextDimBrush}"
+                               Text="Enter: Open | Ctrl+Enter: Folder | Esc: Hide"
+                               Margin="0,0,8,0"/>
+
+                    <CheckBox x:Name="ContentSearchCheck"
+                              Grid.Column="2"
+                              Style="{StaticResource DarkCheckBox}"
+                              Content="Contents"
+                              Margin="0,0,12,0"
+                              Checked="ContentSearchCheck_Changed"
+                              Unchecked="ContentSearchCheck_Changed"/>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
