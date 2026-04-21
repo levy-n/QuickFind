@@ -28,8 +28,14 @@ public partial class SearchWindow : Window
     private bool _forceClose;
     private string? _selectedDrive; // null = all drives
 
-    // Icon cache to avoid repeated shell calls
+    // Icon cache to avoid repeated shell calls. Bounded to keep memory
+    // predictable: extensions are usually ~50-200 distinct values, but a
+    // pathological user with every filetype under the sun shouldn't grow
+    // this unbounded. On overflow we evict the oldest insertion.
+    private const int IconCacheMaxEntries = 512;
     private static readonly Dictionary<string, ImageSource?> _iconCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Queue<string> _iconCacheOrder = new();
+    private static readonly object _iconCacheLock = new();
 
     public SearchWindow(FileIndex index)
     {
@@ -177,11 +183,28 @@ public partial class SearchWindow : Window
         string cacheKey = isDirectory ? ":folder:" : Path.GetExtension(fileName).ToLowerInvariant();
         if (cacheKey == "") cacheKey = ":noext:";
 
-        if (_iconCache.TryGetValue(cacheKey, out var cached))
-            return cached;
+        lock (_iconCacheLock)
+        {
+            if (_iconCache.TryGetValue(cacheKey, out var cached))
+                return cached;
+        }
 
         var icon = ExtractIcon(fileName, isDirectory);
-        _iconCache[cacheKey] = icon;
+
+        lock (_iconCacheLock)
+        {
+            // Another thread may have already added it — keep the first entry.
+            if (!_iconCache.ContainsKey(cacheKey))
+            {
+                _iconCache[cacheKey] = icon;
+                _iconCacheOrder.Enqueue(cacheKey);
+                while (_iconCache.Count > IconCacheMaxEntries && _iconCacheOrder.Count > 0)
+                {
+                    string evict = _iconCacheOrder.Dequeue();
+                    _iconCache.Remove(evict);
+                }
+            }
+        }
         return icon;
     }
 
@@ -398,6 +421,15 @@ public partial class SearchWindow : Window
 
     // ── Actions ────────────────────────────────────────────────────────
 
+    // Extensions we refuse to launch without an explicit user confirmation.
+    // These are all direct-execution vectors: a mis-click in the search
+    // results shouldn't silently run untrusted code.
+    private static readonly HashSet<string> DangerousExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".vbe", ".js", ".jse",
+        ".wsf", ".wsh", ".scr", ".com", ".cpl", ".msc", ".reg", ".pif", ".hta"
+    };
+
     private void OpenResult(ResultItem item, bool openFolder)
     {
         try
@@ -414,6 +446,18 @@ public partial class SearchWindow : Window
             }
             else
             {
+                // Confirm before running executables / scripts.
+                if (DangerousExtensions.Contains(item.Extension))
+                {
+                    var confirm = System.Windows.MessageBox.Show(
+                        this,
+                        $"Run this {item.Extension.TrimStart('.').ToUpperInvariant()} file?\n\n{fullPath}",
+                        "QuickFind — Confirm launch",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+                    if (confirm != MessageBoxResult.Yes) return;
+                }
                 Process.Start(new ProcessStartInfo(fullPath) { UseShellExecute = true });
             }
 
@@ -421,6 +465,7 @@ public partial class SearchWindow : Window
         }
         catch (Exception ex)
         {
+            Core.Logger.Warn($"OpenResult failed for {item.Name}{item.Extension}", ex);
             StatusText.Text = $"Error: {ex.Message}";
         }
     }

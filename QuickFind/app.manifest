@@ -4,7 +4,14 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <!--
+          asInvoker: QuickFind runs under the user's normal privileges by default.
+          MFT indexing requires admin; users enable it via the tray menu which
+          either (a) creates a scheduled task that auto-launches elevated
+          without a UAC prompt, or (b) issues a one-time "runas" on demand.
+          This keeps day-to-day launch silent and UAC-free.
+        -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

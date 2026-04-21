@@ -127,6 +127,7 @@ public sealed class SearchEngine
         try
         {
             string fullPath = _index.ResolvePath(entryIndex);
+            if (string.IsNullOrEmpty(fullPath)) return 0;
             var fi = new FileInfo(fullPath);
             return fi.Exists ? fi.Length : 0;
         }
@@ -212,10 +213,16 @@ public sealed class SearchEngine
                 try
                 {
                     string fullPath = _index.ResolvePath(idx);
+                    if (string.IsNullOrEmpty(fullPath)) return;
                     var fi = new FileInfo(fullPath);
                     if (!fi.Exists || fi.Length > 10 * 1024 * 1024) return;
 
-                    using var reader = new StreamReader(fullPath);
+                    // UTF-8 with BOM detection — falls through to UTF-8 assumption
+                    // for BOM-less files. This correctly handles Hebrew / Cyrillic /
+                    // CJK content, which the default (ANSI) encoding would mangle.
+                    using var reader = new StreamReader(fullPath,
+                        System.Text.Encoding.UTF8,
+                        detectEncodingFromByteOrderMarks: true);
                     string? line;
                     while ((line = reader.ReadLine()) != null)
                     {

@@ -32,23 +32,23 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Single instance check
+        Logger.Info($"QuickFind starting — elevated={IsElevated()}, pid={Environment.ProcessId}");
+
+        // Single instance check — if another instance is already running,
+        // we exit silently rather than interrupting the user with a MessageBox.
+        // (A future named-pipe handshake will instead pop the running window.)
         _mutex = new Mutex(true, "QuickFind_SingleInstance", out bool isNew);
         if (!isNew)
         {
-            MessageBox.Show("QuickFind is already running.", "QuickFind",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Logger.Info("Another instance already running — exiting silently.");
             Shutdown();
             return;
         }
 
-        // Global error handler
-        DispatcherUnhandledException += (_, args) =>
-        {
-            MessageBox.Show($"Error: {args.Exception.Message}\n\n{args.Exception.StackTrace}",
-                "QuickFind Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            args.Handled = true;
-        };
+        // Global error handlers — log everything, show a friendly message.
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
         SetupTrayIcon();
         RegisterHotkey();
@@ -61,6 +61,48 @@ public partial class App : Application
 
         // Start indexing
         _ = IndexAllDrivesAsync();
+    }
+
+    // ── Crash handlers ────────────────────────────────────────────────
+
+    private void OnDispatcherUnhandledException(object sender,
+        System.Windows.Threading.DispatcherUnhandledExceptionEventArgs args)
+    {
+        Logger.Error("DispatcherUnhandledException", args.Exception);
+        ShowCrashDialog(args.Exception);
+        args.Handled = true;
+    }
+
+    private static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs args)
+    {
+        if (args.ExceptionObject is Exception ex)
+            Logger.Error($"AppDomain.UnhandledException (terminating={args.IsTerminating})", ex);
+        else
+            Logger.Error($"AppDomain.UnhandledException (non-Exception: {args.ExceptionObject})");
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
+    {
+        Logger.Error("UnobservedTaskException", args.Exception);
+        args.SetObserved();
+    }
+
+    private static void ShowCrashDialog(Exception ex)
+    {
+        string logPath = Logger.CurrentLogFile ?? Logger.LogDirectory;
+        var result = MessageBox.Show(
+            $"Something went wrong:\n\n{ex.Message}\n\n" +
+            $"Details have been saved to the log file.\n" +
+            $"Open log folder?",
+            "QuickFind",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result == MessageBoxResult.Yes)
+        {
+            try { Process.Start("explorer.exe", $"/select,\"{logPath}\""); }
+            catch (Exception openEx) { Logger.Warn("Could not open log folder", openEx); }
+        }
     }
 
     // ── Tray Icon ──────────────────────────────────────────────────────
@@ -116,6 +158,13 @@ public partial class App : Application
 
         menu.Items.Add(new WinForms.ToolStripSeparator());
 
+        var logItem = menu.Items.Add("Open Log Folder");
+        logItem.Click += (_, _) =>
+        {
+            try { Process.Start("explorer.exe", Logger.LogDirectory); }
+            catch (Exception ex) { Logger.Warn("Could not open log folder from tray", ex); }
+        };
+
         var exitItem = menu.Items.Add("Exit");
         exitItem.Click += (_, _) => Dispatcher.Invoke(ExitApp);
 
@@ -158,9 +207,21 @@ public partial class App : Application
         // White magnifying glass
         using var pen = new Pen(Color.White, 2.5f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
         g.DrawEllipse(pen, 9, 8, 12, 12);
-        g.DrawLine(new Pen(Color.White, 3f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round }, 19, 18, 24, 23);
+        using var penLine = new Pen(Color.White, 3f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+        g.DrawLine(penLine, 19, 18, 24, 23);
 
-        return Icon.FromHandle(bmp.GetHicon());
+        // Icon.FromHandle doesn't own the HICON — copy it so we can free ours.
+        IntPtr hIcon = bmp.GetHicon();
+        try
+        {
+            using var temp = Icon.FromHandle(hIcon);
+            return (Icon)temp.Clone();
+        }
+        finally
+        {
+            // NativeMethods.DestroyIcon releases the HICON cloned above.
+            NativeMethods.DestroyIcon(hIcon);
+        }
     }
 
     // ── Hotkey ─────────────────────────────────────────────────────────
@@ -174,6 +235,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            Logger.Warn("Alt+Space hotkey registration failed", ex);
             MessageBox.Show($"Could not register Alt+Space hotkey: {ex.Message}\n\n" +
                 "Another application may be using this shortcut.",
                 "QuickFind", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -336,6 +398,7 @@ public partial class App : Application
         // If scheduled task exists, use it (no UAC)
         if (IsScheduledTaskInstalled())
         {
+            Logger.Info("RestartElevated: launching via scheduled task (no UAC)");
             RunSchtasks($"/run /tn \"{ScheduledTaskName}\"");
             Current.Dispatcher.Invoke(() => Current.Shutdown());
             return;
@@ -344,6 +407,7 @@ public partial class App : Application
         // Otherwise, use runas (will show UAC once)
         try
         {
+            Logger.Info("RestartElevated: launching via runas (UAC prompt)");
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.ProcessPath!,
@@ -353,7 +417,10 @@ public partial class App : Application
             Process.Start(psi);
             Current.Dispatcher.Invoke(() => Current.Shutdown());
         }
-        catch { /* user cancelled UAC */ }
+        catch (Exception ex)
+        {
+            Logger.Info($"RestartElevated: UAC cancelled or failed — {ex.Message}");
+        }
     }
 
     // ── Replace Windows Search ─────────────────────────────────────────
@@ -510,13 +577,15 @@ public partial class App : Application
 
     private void ExitApp()
     {
+        Logger.Info("ExitApp invoked");
         _indexCts.Cancel();
         IndexPersistence.Save(_index);
 
         _notifyIcon?.Dispose();
         _notifyIcon = null;
 
-        try { HotkeyManager.Current.Remove("ShowSearch"); } catch { }
+        try { HotkeyManager.Current.Remove("ShowSearch"); }
+        catch (Exception ex) { Logger.Warn("Failed to remove Alt+Space hotkey", ex); }
 
         _searchWindow?.ForceClose();
         Shutdown();
@@ -524,8 +593,12 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Logger.Info($"QuickFind exiting — code={e.ApplicationExitCode}");
         _notifyIcon?.Dispose();
-        _mutex?.ReleaseMutex();
+        // ReleaseMutex throws if the current thread didn't own the mutex.
+        // Abandon is safe and the OS drops the handle on process exit anyway.
+        try { _mutex?.ReleaseMutex(); }
+        catch (Exception ex) { Logger.Warn("Mutex release failed (expected on abandonment)", ex); }
         _mutex?.Dispose();
         base.OnExit(e);
     }
