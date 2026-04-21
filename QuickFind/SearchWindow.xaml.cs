@@ -72,20 +72,31 @@ public partial class SearchWindow : Window
 
     public void ShowAndFocus()
     {
-        // WPF's focus model is unreliable the instant a window becomes
-        // visible: Show() → Activate() fires before window activation
-        // actually completes, so a synchronous SearchBox.Focus() often
-        // lands on the window chrome instead. Queuing on the dispatcher
-        // at Input priority means the focus call runs after the OS-level
-        // activation, which matches what the user expects ("Alt+Space,
-        // start typing").
         Show();
         Activate();
+
+        // Synchronous focus + SelectAll — the common path for re-shows
+        // via Alt+Space, where the window already exists.
+        SearchBox.Focus();
+        Keyboard.Focus(SearchBox);
+        SearchBox.SelectAll();
+
+        // Deferred *fallback only*. On first launch (from OnStartup) the
+        // HWND may not be ready for keyboard focus yet, and the sync
+        // call above silently fails. In that case we retry on the
+        // dispatcher — but intentionally WITHOUT SelectAll, because a
+        // delayed SelectAll races with any keystrokes the user may have
+        // already landed, selecting them and letting the *next* key
+        // overwrite them. That was the "letters flash and disappear"
+        // bug on cold launch.
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            SearchBox.Focus();
-            Keyboard.Focus(SearchBox);
-            SearchBox.SelectAll();
+            if (!SearchBox.IsKeyboardFocused)
+            {
+                SearchBox.Focus();
+                Keyboard.Focus(SearchBox);
+                SearchBox.CaretIndex = SearchBox.Text.Length;
+            }
         }), System.Windows.Threading.DispatcherPriority.Input);
     }
 
