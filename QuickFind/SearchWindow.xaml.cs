@@ -72,10 +72,21 @@ public partial class SearchWindow : Window
 
     public void ShowAndFocus()
     {
+        // WPF's focus model is unreliable the instant a window becomes
+        // visible: Show() → Activate() fires before window activation
+        // actually completes, so a synchronous SearchBox.Focus() often
+        // lands on the window chrome instead. Queuing on the dispatcher
+        // at Input priority means the focus call runs after the OS-level
+        // activation, which matches what the user expects ("Alt+Space,
+        // start typing").
         Show();
         Activate();
-        SearchBox.Focus();
-        SearchBox.SelectAll();
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            SearchBox.Focus();
+            Keyboard.Focus(SearchBox);
+            SearchBox.SelectAll();
+        }), System.Windows.Threading.DispatcherPriority.Input);
     }
 
     public void ForceClose()
@@ -340,6 +351,15 @@ public partial class SearchWindow : Window
                 e.Handled = true;
                 break;
 
+            case Key.Delete:
+                if (ResultsList.SelectedItem is ResultItem delSel && !delSel.IsDirectory)
+                {
+                    string fullPath = Path.Combine(delSel.Directory, delSel.Name + delSel.Extension);
+                    DeleteToRecycleBin(fullPath, delSel.EntryIndex);
+                }
+                e.Handled = true;
+                break;
+
             case Key.Escape:
                 SearchBox.Focus();
                 e.Handled = true;
@@ -413,7 +433,7 @@ public partial class SearchWindow : Window
 
         if (!item.IsDirectory)
         {
-            AddItem("\uD83D\uDDD1\uFE0F", "Delete to Recycle Bin", "Del", () => DeleteToRecycleBin(fullPath));
+            AddItem("\uD83D\uDDD1\uFE0F", "Delete to Recycle Bin", "Del", () => DeleteToRecycleBin(fullPath, item.EntryIndex));
         }
 
         menu.IsOpen = true;
@@ -529,7 +549,7 @@ public partial class SearchWindow : Window
         catch { }
     }
 
-    private void DeleteToRecycleBin(string path)
+    private void DeleteToRecycleBin(string path, int entryIndex = -1)
     {
         try
         {
@@ -540,14 +560,32 @@ public partial class SearchWindow : Window
             if (result == MessageBoxResult.Yes)
             {
                 NativeMethods.MoveToRecycleBin(path);
-                _lastQuery = "";
-                _debounceTimer.Start();
+
+                // Tombstone immediately so the next search doesn't keep
+                // showing the deleted file. The USN watcher will arrive at
+                // the same conclusion a few seconds later; this is just
+                // the low-latency user-facing path.
+                if (entryIndex >= 0)
+                    _index.RemoveByEntryIndex(entryIndex);
+
+                RefreshResults();
             }
         }
         catch (Exception ex)
         {
+            Core.Logger.Warn($"DeleteToRecycleBin failed for {path}", ex);
             StatusText.Text = $"Error: {ex.Message}";
         }
+    }
+
+    // Force the next debounce tick to run a fresh search even if the query
+    // text hasn't changed. Used after a delete or any other operation that
+    // mutates the underlying index.
+    private void RefreshResults()
+    {
+        _lastQuery = "\u0000";
+        _debounceTimer.Stop();
+        _debounceTimer.Start();
     }
 
     // ── Window buttons ───────────────────────────────────────────────

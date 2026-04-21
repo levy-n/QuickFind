@@ -10,7 +10,8 @@
         Background="Transparent"
         ShowInTaskbar="True"
         Topmost="True"
-        ResizeMode="NoResize">
+        ResizeMode="NoResize"
+        FocusManager.FocusedElement="{Binding ElementName=SearchBox}">
 
     <Window.Resources>
         <!-- Result item template -->

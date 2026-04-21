@@ -256,6 +256,31 @@ public sealed class FileIndex
         }
     }
 
+    // Immediate tombstone by in-memory index — used when the UI deletes a
+    // result so the next search doesn't still show the removed file while
+    // we wait for the USN poller (next tick can be up to ~5 s away).
+    public void RemoveByEntryIndex(int entryIndex)
+    {
+        lock (_lock)
+        {
+            if ((uint)entryIndex >= (uint)_entries.Count) return;
+            var old = _entries[entryIndex];
+            if (old.Name.Length == 0) return; // already tombstoned
+
+            _entries[entryIndex] = new FileEntry(string.Empty, old.DriveRoot, old.ParentFrn, old.IsDirectory, old.CachedDirectory, 0);
+
+            // If this was an MFT-indexed entry, drop its FRN mapping too
+            // so a later USN add-or-update can reinsert cleanly.
+            if (old.DriveRoot.Length > 0 && _frnMaps.TryGetValue(old.DriveRoot, out var map))
+            {
+                var toRemove = new List<ulong>();
+                foreach (var kvp in map)
+                    if (kvp.Value == entryIndex) toRemove.Add(kvp.Key);
+                foreach (var k in toRemove) map.Remove(k);
+            }
+        }
+    }
+
     // Binary persistence
     public void SaveTo(BinaryWriter writer)
     {
