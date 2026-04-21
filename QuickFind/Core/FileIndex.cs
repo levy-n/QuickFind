@@ -7,10 +7,18 @@ public sealed class FileIndex
     private readonly object _lock = new();
     private readonly Dictionary<string, Dictionary<ulong, int>> _frnMaps = new();
     private readonly List<FileEntry> _entries = new();
+    private long _generation;
 
     public int Count
     {
         get { lock (_lock) return _entries.Count; }
+    }
+
+    // Incremented every time the index is cleared. Callers holding a snapshot
+    // can compare against this to detect that their indices are now stale.
+    public long Generation
+    {
+        get { lock (_lock) return _generation; }
     }
 
     public void Clear()
@@ -19,6 +27,7 @@ public sealed class FileIndex
         {
             _entries.Clear();
             _frnMaps.Clear();
+            _generation++;
         }
     }
 
@@ -50,6 +59,9 @@ public sealed class FileIndex
     {
         lock (_lock)
         {
+            if ((uint)entryIndex >= (uint)_entries.Count)
+                return string.Empty; // stale index (e.g. from pre-Clear snapshot)
+
             var entry = _entries[entryIndex];
 
             // Fallback entry: path already resolved
@@ -64,7 +76,10 @@ public sealed class FileIndex
 
             while (depth++ < 256)
             {
-                parts.Push(current.Name);
+                // Skip "." — the NTFS root directory's own name, which would
+                // otherwise produce paths like "C:\.\Users\..."
+                if (current.Name != "." && current.Name != "..")
+                    parts.Push(current.Name);
 
                 if (!_frnMaps.TryGetValue(current.DriveRoot, out var map))
                     break;
@@ -72,6 +87,8 @@ public sealed class FileIndex
                     break;
                 if (parentIdx == currentIdx)
                     break; // root self-reference
+                if ((uint)parentIdx >= (uint)_entries.Count)
+                    break;
 
                 currentIdx = parentIdx;
                 current = _entries[parentIdx];
@@ -85,6 +102,9 @@ public sealed class FileIndex
     {
         lock (_lock)
         {
+            if ((uint)entryIndex >= (uint)_entries.Count)
+                return string.Empty;
+
             var entry = _entries[entryIndex];
             if (entry.CachedDirectory != null)
                 return entry.CachedDirectory;
@@ -148,6 +168,8 @@ public sealed class FileIndex
     {
         lock (_lock)
         {
+            if ((uint)entryIndex >= (uint)_entries.Count)
+                return 0;
             return _entries[entryIndex].Size;
         }
     }

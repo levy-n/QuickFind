@@ -1,0 +1,171 @@
+# QuickFind — Production Readiness Roadmap
+
+This document tracks everything that needs to happen before QuickFind is considered production-ready.
+Tasks are ordered roughly **hardest to easiest**. Check off items as they're completed.
+
+---
+
+## 🔴 Critical — Must-have for 1.0
+
+### Architecture & Correctness
+
+- [ ] **USN Journal — Incremental Index Updates**
+  New / renamed / deleted files must appear automatically without a full re-index.
+  Implement `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL` with a persistent cursor per drive.
+  *Files:* new `Core/UsnWatcher.cs`, wire into `App.xaml.cs` after initial index completes.
+
+- [ ] **File Sizes from MFT directly (no per-entry I/O)**
+  Currently `MftIndexer` stores `size = 0`. Size searches (`>1GB` etc.) then hit disk once per file via `ResolveSizeSafe` — unusable on 3 M files.
+  Either parse `$STANDARD_INFORMATION` / `$DATA` from raw MFT, or enumerate with `USN_RECORD_V3` + `GetFileInformationByHandleEx`.
+  *Files:* `Core/MftIndexer.cs`, `Helpers/NativeMethods.cs`.
+
+- [ ] **Proper Search Index (prefix map / trigram)**
+  Current search is O(N) linear scan + per-keystroke full snapshot allocation (`FileIndex.GetSnapshot`).
+  On 3 M files each keystroke allocates ~70 MB and scans everything → GC storm + UI jank.
+  Replace with lowercase-prefix map (`Dictionary<string, List<int>>` keyed by 2-3 char prefix) or a proper trie/suffix structure.
+  *Files:* `Core/FileIndex.cs`, `Core/SearchEngine.cs`.
+
+- [x] **Race condition: Reindex clears index while search is in-flight**
+  `ReindexAsync` calls `_index.Clear()` while `SearchEngine` may hold index references → `IndexOutOfRangeException` in `ResolveSizeSafe`.
+  Fix with generation token or `ReaderWriterLockSlim`.
+  *Files:* `Core/FileIndex.cs`, `Core/SearchEngine.cs`.
+
+### UX Blockers
+
+- [ ] **Named-Pipe single-instance signaling**
+  Current behavior: second launch shows a `MessageBox "Already running"` and exits. Should instead tell the running instance to pop open the search window.
+  *Files:* `App.xaml.cs`.
+
+  *Note: partial fix applied — second launch now silently exits instead of showing a MessageBox, which removes the UX blocker for Scheduled-Task autostart collisions. Full pipe-based "show window" still pending.*
+
+- [x] **Manifest → `asInvoker` + dynamic elevation**
+  `requireAdministrator` currently forces UAC on every manual launch. Installer (or first-run flow) should create the Scheduled Task; the EXE itself must run as plain user.
+  *Files:* `app.manifest`, `App.xaml.cs` (elevation-on-demand via scheduled task).
+
+### Security & Robustness
+
+- [x] **Confirmation before launching executables**
+  `Enter` on a `.exe` / `.bat` / `.ps1` / `.msi` / `.cmd` / `.vbs` result launches immediately. Needs an opt-out confirmation dialog.
+  *Files:* `SearchWindow.xaml.cs`.
+
+- [x] **Structured logging (file-based, rolling)**
+  Every `catch { }` currently swallows errors silently. Add a lightweight logger that writes to `%LOCALAPPDATA%\QuickFind\logs\quickfind.log` with daily rotation.
+  *Files:* new `Core/Logger.cs`, callsites throughout.
+
+- [x] **Friendly global crash handler**
+  Currently dumps full stack trace in a `MessageBox`. Should log + show a short "Something went wrong" message with a "View log" button.
+  *Files:* `App.xaml.cs`.
+
+---
+
+## 🟡 Important — Should-have for 1.0
+
+### Correctness
+
+- [x] **UTF-8 encoding for content search**
+  `StreamReader(path)` uses default ANSI — Hebrew UTF-8 without BOM is misread.
+  Use `new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true)`.
+  *Files:* `Core/SearchEngine.cs`.
+
+- [x] **NTFS root entry causes `C:\.\...` in paths**
+  MFT root (FRN = 5) has name `.` — when walking parent chain this gets pushed onto the path stack.
+  Guard against pushing `.` or `..` at the top of the chain.
+  *Files:* `Core/FileIndex.cs`.
+
+- [x] **HICON handle leak in fallback icon**
+  `Icon.FromHandle(bmp.GetHicon())` never calls `DestroyIcon`.
+  *Files:* `App.xaml.cs`.
+
+- [x] **Bound icon cache**
+  Static `_iconCache` in `SearchWindow` grows without limit.
+  Use `LruCache<string, ImageSource>` capped at ~200 entries.
+  *Files:* `SearchWindow.xaml.cs`.
+
+### Installation & Distribution
+
+- [ ] **Installer (MSIX or WiX MSI)**
+  - Start Menu shortcut
+  - Add / Remove Programs entry
+  - Creates the `QuickFindAdmin` scheduled task on install (no UAC on relaunch)
+  - Uninstalls cleanly (removes task, removes registry keys, removes index folder)
+
+- [ ] **Code signing**
+  Unsigned EXE → SmartScreen warning on every download.
+  Options: Certum Open Source cert, SignPath.io (free for OSS), Azure Trusted Signing.
+
+- [ ] **Auto-update mechanism**
+  Squirrel.Windows / Velopack / WinGet manifest.
+
+### Testing
+
+- [ ] **Unit tests (xUnit)**
+  At minimum cover: `SearchEngine.ScoreName`, `SearchEngine.ParseSizeFilter`, `FileIndex.ResolvePath`, `IndexPersistence` round-trip.
+
+- [ ] **CI (GitHub Actions)**
+  Build on Windows + run tests on every push / PR.
+
+- [ ] **Smoke-test script**
+  Launch EXE, wait for indexing, run a known query, verify results, exit cleanly.
+
+---
+
+## 🟢 Nice-to-have — 1.1+
+
+### Performance / Storage
+
+- [x] **GZip-compressed index file**
+  ~100 MB raw → ~25-30 MB compressed, same cold-load time thanks to faster disk I/O.
+  *Files:* `Core/IndexPersistence.cs`.
+
+- [ ] **Memory-mapped / streamed index load**
+  For users with >10 M files, load lazily.
+
+- [ ] **Icon cache LRU + disk cache**
+  Persist icon cache to disk so cold launch is fast.
+
+### Features
+
+- [ ] **Dark mode toggle**
+  `Resources/Styles.xaml` currently ships light-only. Add a dark palette + runtime toggle.
+
+- [ ] **Hebrew / RTL localization**
+  UI strings → `.resx`; flip `FlowDirection` based on `CultureInfo`.
+
+- [ ] **More search operators**
+  - `ext:pdf` — extension filter
+  - `folder:projects` — restrict to path substring
+  - `modified:<7d` — modified date filter
+  - Regex mode toggle
+
+- [ ] **"Show all results" instead of 100-item cap**
+  Add virtualization (`VirtualizingStackPanel`) and remove hard cap.
+
+- [ ] **File preview pane**
+  Optional right-side preview for images, text, PDFs.
+
+- [ ] **Quick actions: rename, move, copy**
+
+### System integration
+
+- [ ] **"Run as Admin" in result context menu** (via ShellExecute `runas` verb).
+
+- [ ] **Tray icon: indexing progress indicator** (spinning badge / percentage).
+
+- [ ] **Pause / resume indexing** when on battery / when CPU is busy.
+
+- [ ] **Explorer-restart uses `TaskbarCreated` broadcast** instead of `Kill()`.
+
+### Polish
+
+- [ ] **Better empty-state art / first-run welcome**
+- [ ] **About dialog with version, OSS licenses, GitHub link**
+- [ ] **Settings window** — hotkey, theme, drives to index, max results, scheduled re-index time
+- [ ] **Telemetry opt-in** (Application Insights / Sentry) for crash reports only
+
+---
+
+## Legend
+
+- 🔴 **Critical** — ship-blockers; QuickFind is not production-ready without these
+- 🟡 **Important** — polish / robustness; strongly recommended for 1.0
+- 🟢 **Nice-to-have** — post-1.0 features
