@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [master, 'feature/**']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore QuickFind.sln
+
+      - name: Build (Release)
+        run: dotnet build QuickFind.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test QuickFind.Tests/QuickFind.Tests.csproj -c Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/*.trx
+
+  publish:
+    needs: build-test
+    runs-on: windows-latest
+    timeout-minutes: 15
+    # Only build the self-contained artifact on master and tagged builds;
+    # feature branches get a quick build+test cycle only.
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish self-contained single-file
+        run: dotnet publish QuickFind/QuickFind.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickFind-${{ github.sha }}
+          path: publish/QuickFind.exe
+          retention-days: 30

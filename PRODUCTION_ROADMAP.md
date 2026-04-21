@@ -13,10 +13,9 @@ Tasks are ordered roughly **hardest to easiest**. Check off items as they're com
   Background per-drive watchers (polling every 5 s) read the NTFS change journal via `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL` and apply create/rename/delete records to the in-memory index. Cursor (journal ID + NextUsn per drive) is persisted to `%LOCALAPPDATA%\QuickFind\usn.state` so updates survive restarts. Journal-rollover detection falls back to the current journal tail (avoids stale cursors causing a crash). Admin-only — no-op on non-elevated launches.
   *Files:* new `Core/UsnWatcher.cs`, `Core/FileIndex.cs` (`UsnAddOrUpdate`, `UsnRemove`, tombstone-skipping), `Helpers/NativeMethods.cs` (new structs + DeviceIoControl overloads), `App.xaml.cs` (start after initial index, restart on reindex, dispose on exit).
 
-- [ ] **File Sizes from MFT directly (no per-entry I/O)**
-  Currently `MftIndexer` stores `size = 0`. Size searches (`>1GB` etc.) then hit disk once per file via `ResolveSizeSafe` — unusable on 3 M files.
-  Either parse `$STANDARD_INFORMATION` / `$DATA` from raw MFT, or enumerate with `USN_RECORD_V3` + `GetFileInformationByHandleEx`.
-  *Files:* `Core/MftIndexer.cs`, `Helpers/NativeMethods.cs`.
+- [~] **File Sizes from MFT directly (no per-entry I/O)** — *partial*
+  `MftIndexer` still stores `size = 0` (USN records don't carry size), but `ResolveSizeSafe` now writes the resolved size back into the entry (`FileIndex.TrySetEntrySize`). First size query on a cold cache still hits disk once per file; subsequent queries are O(1). For a proper zero-I/O solution we'd need to parse raw `$MFT` records via `FSCTL_GET_NTFS_FILE_RECORD` and walk the `$STANDARD_INFORMATION` / `$DATA` attributes — substantial work, deferred.
+  *Files:* `Core/FileIndex.cs`, `Core/SearchEngine.cs`.
 
 - [~] **Proper Search Index (prefix map / trigram)** — *partial*
   Current search was O(N) linear scan + per-keystroke full snapshot allocation (`FileIndex.GetSnapshot`) + per-entry `ToLowerInvariant`.
@@ -96,11 +95,11 @@ Tasks are ordered roughly **hardest to easiest**. Check off items as they're com
 
 ### Testing
 
-- [ ] **Unit tests (xUnit)**
-  At minimum cover: `SearchEngine.ScoreName`, `SearchEngine.ParseSizeFilter`, `FileIndex.ResolvePath`, `IndexPersistence` round-trip.
+- [x] **Unit tests (xUnit)**
+  `QuickFind.Tests` project with 31 tests covering `SearchEngine.ScoreName`, `SearchEngine.ParseSizeFilter`, `FileIndex.ResolvePath` (including the NTFS-root `.` fix), tombstone / USN mutation semantics, and `FileIndex` round-trip through both the raw binary and GZip + BufferedStream formats. Uses `InternalsVisibleTo` so we don't leak test surface into the public API.
 
-- [ ] **CI (GitHub Actions)**
-  Build on Windows + run tests on every push / PR.
+- [x] **CI (GitHub Actions)**
+  `.github/workflows/ci.yml`: restore → build (Release) → test → upload `.trx` results on every push to `master` and `feature/**` and every PR to `master`. On master / tags, also builds and uploads the self-contained `QuickFind.exe` as an artifact.
 
 - [ ] **Smoke-test script**
   Launch EXE, wait for indexing, run a known query, verify results, exit cleanly.
@@ -145,7 +144,7 @@ Tasks are ordered roughly **hardest to easiest**. Check off items as they're com
 
 ### System integration
 
-- [ ] **"Run as Admin" in result context menu** (via ShellExecute `runas` verb).
+- [x] **"Run as Admin" in result context menu** — appears only for launchable types (`.exe`, `.msi`, `.bat`, `.cmd`, `.ps1`). Uses `ShellExecute "runas"`.
 
 - [ ] **Tray icon: indexing progress indicator** (spinning badge / percentage).
 

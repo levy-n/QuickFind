@@ -429,6 +429,12 @@ public partial class SearchWindow : Window
         {
             AddItem("\uD83D\uDCC4", "Open File", "Enter", () => OpenResult(item, false));
             AddItem("\uD83D\uDCC2", "Open Containing Folder", "Ctrl+Enter", () => OpenResult(item, true));
+
+            // Only show "Run as Admin" for executables — the shell's runas
+            // verb is a no-op (or error) on documents.
+            if (IsLaunchable(item.Extension))
+                AddItem("\u26A1", "Run as Admin", null, () => RunAsAdmin(fullPath));
+
             AddSep();
             AddItem("\uD83D\uDCBB", "Open Folder in Terminal", "Ctrl+T", () => OpenInTerminal(item.Directory, false));
             AddItem("\u270F\uFE0F", "Open in VS Code", null, () => OpenInVSCode(fullPath));
@@ -527,6 +533,31 @@ public partial class SearchWindow : Window
                 });
             }
             catch { }
+        }
+    }
+
+    private static bool IsLaunchable(string ext) =>
+        ext.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".msi", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".bat", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".ps1", StringComparison.OrdinalIgnoreCase);
+
+    private static void RunAsAdmin(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(path)
+            {
+                Verb = "runas",
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(path) ?? string.Empty
+            });
+        }
+        catch (Exception ex)
+        {
+            // User cancelled UAC or permission denied — log, don't crash.
+            Core.Logger.Info($"RunAsAdmin declined or failed for {path}: {ex.Message}");
         }
     }
 

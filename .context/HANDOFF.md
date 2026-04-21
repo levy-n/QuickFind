@@ -20,6 +20,15 @@ QuickFind - Lightweight fast file search tool for Windows. System tray app with 
 - [x] Build + publish succeeds (~150MB self-contained EXE)
 - [x] Professional README and MIT license
 
+## Completed this session (feature/production-readiness) — Pass 4
+- [x] **xUnit test project** — `QuickFind.Tests` (net8.0-windows) with 31 tests covering `ScoreName`, `ParseSizeFilter`, `FileIndex.ResolvePath` (incl. the NTFS `.` root fix), tombstone / USN mutation semantics, bounds-check safety, drive filtering, and GZip+BufferedStream round-trip. `InternalsVisibleTo` keeps the public API untouched.
+- [x] **GitHub Actions CI** — `.github/workflows/ci.yml`. Restore / build / test on every push to master and feature branches and every PR to master. Uploads `.trx` results; on master/tags also publishes the self-contained EXE as an artifact.
+- [x] **"Run as Admin"** context-menu item — visible only on launchable types (`.exe`, `.msi`, `.bat`, `.cmd`, `.ps1`). Uses `ShellExecute "runas"`; logs UAC-cancelled cleanly.
+- [x] **Delete key on results list** — was cosmetic "Del" in the menu only; now actually wired.
+- [x] **Instant refresh after delete** — `FileIndex.RemoveByEntryIndex` tombstones synchronously; UI triggers a forced re-search so the deleted file disappears immediately (USN would catch up a few seconds later regardless).
+- [x] **Auto-focus race fix** — cold-launch bug where letters flashed-selected then got overwritten. Synchronous focus + SelectAll is the primary path; dispatcher fallback runs only if sync focus didn't stick, and never re-selects.
+- [x] **Size-resolve caching** — `FileIndex.TrySetEntrySize` writes back resolved sizes so repeat size queries on the same entry are O(1). Partial fix for the "MFT file sizes" roadmap item; a proper raw-$MFT parser is still deferred.
+
 ## Completed this session (feature/production-readiness) — Pass 3
 - [x] **USN Journal — Incremental Index Updates** — new `Core/UsnWatcher.cs`. One background thread per NTFS drive polls `FSCTL_READ_USN_JOURNAL` every 5 s with `ReturnOnlyOnClose=1` and applies creates / renames / deletes to the in-memory index. Cursor (JournalID + NextUsn) is persisted per drive to `%LOCALAPPDATA%\QuickFind\usn.state`. Admin-only — skips silently on non-elevated launches.
 - [x] **FileIndex mutations** — `UsnAddOrUpdate(driveRoot, frn, parentFrn, name, isDir)` and `UsnRemove(driveRoot, frn)`. Removes are tombstoned (zero-length name) so existing integer indices held by search snapshots remain valid; tombstones are filtered in `ScanForSearch`.

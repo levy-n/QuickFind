@@ -206,6 +206,21 @@ public sealed class FileIndex
         }
     }
 
+    // Background size-resolver writes results back here so the next size
+    // query on the same entry is O(1). Only updates entries that have
+    // size == 0 to avoid clobbering already-resolved or future USN values.
+    public void TrySetEntrySize(int entryIndex, long size)
+    {
+        if (size <= 0) return;
+        lock (_lock)
+        {
+            if ((uint)entryIndex >= (uint)_entries.Count) return;
+            var e = _entries[entryIndex];
+            if (e.Size > 0 || e.Name.Length == 0) return; // already set, or tombstoned
+            _entries[entryIndex] = new FileEntry(e.Name, e.DriveRoot, e.ParentFrn, e.IsDirectory, e.CachedDirectory, size);
+        }
+    }
+
     // ── USN journal mutations ─────────────────────────────────────────
     //
     // USN applies one record per file close. We treat journal updates

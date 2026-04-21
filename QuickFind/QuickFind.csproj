@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="QuickFind.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Resources\app.ico" />
   </ItemGroup>
 

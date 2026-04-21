@@ -128,12 +128,19 @@ public sealed class SearchEngine
             string fullPath = _index.ResolvePath(entryIndex);
             if (string.IsNullOrEmpty(fullPath)) return 0;
             var fi = new FileInfo(fullPath);
-            return fi.Exists ? fi.Length : 0;
+            if (!fi.Exists) return 0;
+            long size = fi.Length;
+            // Write the resolved size back into the index so the next
+            // size query on this entry is O(1). This is the pragmatic
+            // workaround for USN not carrying file sizes — size searches
+            // stay slow on a cold cache but speed up on repeat usage.
+            _index.TrySetEntrySize(entryIndex, size);
+            return size;
         }
         catch { return 0; }
     }
 
-    private static (string nameQuery, long minSize, long maxSize) ParseSizeFilter(string query)
+    internal static (string nameQuery, long minSize, long maxSize) ParseSizeFilter(string query)
     {
         long minSize = 0;
         long maxSize = long.MaxValue;
@@ -166,7 +173,7 @@ public sealed class SearchEngine
         return (remaining, minSize, maxSize);
     }
 
-    private static int ScoreName(string name, string query)
+    internal static int ScoreName(string name, string query)
     {
         // OrdinalIgnoreCase avoids allocating a lowercased copy of every
         // filename on every keystroke — a hot-path hit when scoring 3M+
