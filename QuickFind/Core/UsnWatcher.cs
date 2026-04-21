@@ -19,6 +19,13 @@ public sealed class UsnWatcher : IDisposable
 {
     private const int BUFFER_SIZE = 512 * 1024;
     private const int POLL_INTERVAL_MS = 5000;
+    // Windows error codes for "no journal on this volume". When we see
+    // these there's no point retrying — the journal simply isn't active
+    // on the drive. Creating one requires fsutil and write access; not
+    // our call.
+    private const int ERROR_JOURNAL_DELETE_IN_PROGRESS = 1178;
+    private const int ERROR_JOURNAL_NOT_ACTIVE = 1179;
+    private const int ERROR_JOURNAL_ENTRY_DELETED = 1181;
 
     private readonly FileIndex _index;
     private readonly Action? _onChange;
@@ -92,7 +99,13 @@ public sealed class UsnWatcher : IDisposable
 
                     if (!QueryJournal(handle, out var journal))
                     {
-                        Logger.Warn($"UsnWatcher: FSCTL_QUERY_USN_JOURNAL failed on {driveRoot}");
+                        int err = Marshal.GetLastWin32Error();
+                        if (err == ERROR_JOURNAL_NOT_ACTIVE || err == ERROR_JOURNAL_DELETE_IN_PROGRESS)
+                        {
+                            Logger.Info($"UsnWatcher: {driveRoot} has no USN journal (err={err}); watcher will not run for this drive");
+                            return; // Permanent — nothing we can do, no point looping.
+                        }
+                        Logger.Warn($"UsnWatcher: FSCTL_QUERY_USN_JOURNAL failed on {driveRoot} (err={err})");
                         WaitOrCancel(30000);
                         continue;
                     }

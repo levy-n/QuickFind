@@ -55,10 +55,16 @@ public static class IndexPersistence
             }
 
             // v3+ = body is GZip-compressed; v1/v2 = raw.
+            // BufferedStream wrapping GZipStream is critical: BinaryReader
+            // performs millions of tiny reads (ReadString, ReadInt32, …)
+            // and GZipStream handles each one as a separate decompression
+            // call. Without a 64 KB buffer in front, loading a 3 M-entry
+            // index takes minutes instead of seconds.
             if (version >= 3)
             {
                 using var gz = new GZipStream(fs, CompressionMode.Decompress);
-                using var reader = new BinaryReader(gz);
+                using var buffered = new BufferedStream(gz, 64 * 1024);
+                using var reader = new BinaryReader(buffered);
                 index.LoadFrom(reader, version);
             }
             else
@@ -95,7 +101,8 @@ public static class IndexPersistence
                 fs.Write(header);
 
                 using var gz = new GZipStream(fs, CompressionLevel.Fastest);
-                using var writer = new BinaryWriter(gz);
+                using var buffered = new BufferedStream(gz, 64 * 1024);
+                using var writer = new BinaryWriter(buffered);
                 index.SaveTo(writer);
             }
 
