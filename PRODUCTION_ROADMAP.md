@@ -19,10 +19,11 @@ Tasks are ordered roughly **hardest to easiest**. Check off items as they're com
   Either parse `$STANDARD_INFORMATION` / `$DATA` from raw MFT, or enumerate with `USN_RECORD_V3` + `GetFileInformationByHandleEx`.
   *Files:* `Core/MftIndexer.cs`, `Helpers/NativeMethods.cs`.
 
-- [ ] **Proper Search Index (prefix map / trigram)**
-  Current search is O(N) linear scan + per-keystroke full snapshot allocation (`FileIndex.GetSnapshot`).
-  On 3 M files each keystroke allocates ~70 MB and scans everything → GC storm + UI jank.
-  Replace with lowercase-prefix map (`Dictionary<string, List<int>>` keyed by 2-3 char prefix) or a proper trie/suffix structure.
+- [~] **Proper Search Index (prefix map / trigram)** — *partial*
+  Current search was O(N) linear scan + per-keystroke full snapshot allocation (`FileIndex.GetSnapshot`) + per-entry `ToLowerInvariant`.
+  On 3 M files each keystroke allocated ~100 MB of tuples and allocated a lowercase copy of every name → GC storm + UI jank.
+  **Done:** replaced `GetSnapshot`+foreach with streaming `ScanForSearch` (zero allocation per scan) and switched `ScoreName` to `OrdinalIgnoreCase` so no lowercased copies are allocated. That alone removes the ~100 MB-per-keystroke GC pressure on large indexes.
+  **Still pending:** a proper prefix/trigram index would bring search from O(N) to O(k) for prefix matches. Not required for acceptable perceived latency at <1 M files.
   *Files:* `Core/FileIndex.cs`, `Core/SearchEngine.cs`.
 
 - [x] **Race condition: Reindex clears index while search is in-flight**
@@ -32,11 +33,9 @@ Tasks are ordered roughly **hardest to easiest**. Check off items as they're com
 
 ### UX Blockers
 
-- [ ] **Named-Pipe single-instance signaling**
-  Current behavior: second launch shows a `MessageBox "Already running"` and exits. Should instead tell the running instance to pop open the search window.
-  *Files:* `App.xaml.cs`.
-
-  *Note: partial fix applied — second launch now silently exits instead of showing a MessageBox, which removes the UX blocker for Scheduled-Task autostart collisions. Full pipe-based "show window" still pending.*
+- [x] **Named-Pipe single-instance signaling**
+  Second launch now connects to the running instance over a `NamedPipeServerStream` named `QuickFind_SingleInstance_Pipe`, sends `SHOW`, and the running instance pops its search window before the second process exits.
+  *Files:* new `Core/SingleInstance.cs`, wired into `App.xaml.cs`.
 
 - [x] **Manifest → `asInvoker` + dynamic elevation**
   `requireAdministrator` currently forces UAC on every manual launch. Installer (or first-run flow) should create the Scheduled Task; the EXE itself must run as plain user.

@@ -20,7 +20,12 @@ QuickFind - Lightweight fast file search tool for Windows. System tray app with 
 - [x] Build + publish succeeds (~150MB self-contained EXE)
 - [x] Professional README and MIT license
 
-## Completed this session (feature/production-readiness)
+## Completed this session (feature/production-readiness) — Pass 2
+- [x] **Search hot-path allocation fix** — `FileIndex.ScanForSearch` streams entries without materialising a 100 MB snapshot of tuples per keystroke. `ScoreName` uses `OrdinalIgnoreCase` so no per-entry lowercase copy is allocated. Net effect: searches on large indexes no longer trigger a GC storm.
+- [x] **Named-Pipe single-instance signaling** — new `Core/SingleInstance.cs`. A second launch of QuickFind connects to pipe `QuickFind_SingleInstance_Pipe`, sends `SHOW`, and the running instance pops its search window. Falls back to silent exit if the pipe connect fails.
+- [x] **Build + publish verified** — 0 warnings, 0 errors in Release; self-contained single-file EXE built.
+
+## Completed this session (feature/production-readiness) — Pass 1
 - [x] **PRODUCTION_ROADMAP.md** — master task list ordered hardest-to-easiest
 - [x] **Race-condition safety in FileIndex** — bounds-check `_entries[i]` everywhere; add `Generation` counter so callers can detect stale snapshots
 - [x] **NTFS root `.` path fix** — `ResolvePath` no longer emits `C:\.\Users\...`

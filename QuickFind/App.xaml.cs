@@ -23,6 +23,7 @@ public partial class App : Application
     private SearchWindow? _searchWindow;
     private FileIndex _index = new();
     private CancellationTokenSource _indexCts = new();
+    private CancellationTokenSource _pipeCts = new();
 
     private const string TaskbarSearchKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Search";
     private const string TaskbarSearchValue = "SearchboxTaskbarMode";
@@ -34,16 +35,22 @@ public partial class App : Application
 
         Logger.Info($"QuickFind starting — elevated={IsElevated()}, pid={Environment.ProcessId}");
 
-        // Single instance check — if another instance is already running,
-        // we exit silently rather than interrupting the user with a MessageBox.
-        // (A future named-pipe handshake will instead pop the running window.)
+        // Single instance: if another instance is running, signal it to pop
+        // its search window and then exit. If the signal fails, we still
+        // exit (the mutex already prevented a second live instance).
         _mutex = new Mutex(true, "QuickFind_SingleInstance", out bool isNew);
         if (!isNew)
         {
-            Logger.Info("Another instance already running — exiting silently.");
+            bool signalled = SingleInstance.TrySignalShow();
+            Logger.Info($"Another instance already running — signalled={signalled}. Exiting.");
             Shutdown();
             return;
         }
+
+        // Start listening for signals from future launches.
+        SingleInstance.StartServer(
+            onShow: () => Dispatcher.BeginInvoke(() => _searchWindow?.ShowAndFocus()),
+            ct: _pipeCts.Token);
 
         // Global error handlers — log everything, show a friendly message.
         DispatcherUnhandledException += OnDispatcherUnhandledException;
@@ -579,6 +586,7 @@ public partial class App : Application
     {
         Logger.Info("ExitApp invoked");
         _indexCts.Cancel();
+        _pipeCts.Cancel();
         IndexPersistence.Save(_index);
 
         _notifyIcon?.Dispose();

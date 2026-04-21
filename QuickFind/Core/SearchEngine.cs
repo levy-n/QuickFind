@@ -44,35 +44,34 @@ public sealed class SearchEngine
         if (hasSizeFilter && string.IsNullOrWhiteSpace(nameQuery))
             return SearchBySize(minSize, maxSize, ct);
 
-        // Name search (with optional size filter)
-        string queryLower = nameQuery.ToLowerInvariant();
         var results = new List<SearchResult>();
+        string trimmedQuery = nameQuery.Trim();
 
-        var snapshot = _index.GetSnapshot(DriveFilter);
-        foreach (var (idx, name, isDir, storedSize) in snapshot)
+        // Streaming scan — no giant snapshot allocation. Scoring uses
+        // OrdinalIgnoreCase comparisons so we avoid a ToLowerInvariant
+        // allocation for every one of the millions of entries.
+        _index.ScanForSearch(DriveFilter, ct, (idx, name, isDir, storedSize) =>
         {
-            ct.ThrowIfCancellationRequested();
+            int score = ScoreName(name, trimmedQuery);
+            if (score <= 0) return true;
 
-            int score = ScoreName(name, queryLower);
-            if (score > 0)
+            if (hasSizeFilter)
             {
-                if (hasSizeFilter)
-                {
-                    long size = storedSize > 0 ? storedSize : ResolveSizeSafe(idx);
-                    if (size >= minSize && size <= maxSize)
-                        results.Add(new SearchResult(idx, name, isDir, score, size));
-                }
-                else
-                {
-                    results.Add(new SearchResult(idx, name, isDir, score, storedSize));
-                }
+                long size = storedSize > 0 ? storedSize : ResolveSizeSafe(idx);
+                if (size >= minSize && size <= maxSize)
+                    results.Add(new SearchResult(idx, name, isDir, score, size));
             }
-        }
+            else
+            {
+                results.Add(new SearchResult(idx, name, isDir, score, storedSize));
+            }
+            return true;
+        });
 
         // Content search (optional, only for text files)
         if (searchContents && !hasSizeFilter && results.Count < 50)
         {
-            SearchContents(queryLower, results, ct);
+            SearchContents(trimmedQuery, results, ct);
         }
 
         if (hasSizeFilter)
@@ -167,28 +166,33 @@ public sealed class SearchEngine
         return (remaining, minSize, maxSize);
     }
 
-    private static int ScoreName(string name, string queryLower)
+    private static int ScoreName(string name, string query)
     {
-        string nameLower = name.ToLowerInvariant();
+        // OrdinalIgnoreCase avoids allocating a lowercased copy of every
+        // filename on every keystroke — a hot-path hit when scoring 3M+
+        // entries. Ordinal is right for file names (no locale folding).
 
-        if (nameLower == queryLower)
+        if (string.Equals(name, query, StringComparison.OrdinalIgnoreCase))
             return 100;
 
-        // Exact match without extension
-        int dotIdx = nameLower.LastIndexOf('.');
-        if (dotIdx > 0 && nameLower.AsSpan(0, dotIdx).SequenceEqual(queryLower))
+        // Exact match without extension (e.g. "readme" matches "readme.md")
+        int dotIdx = name.LastIndexOf('.');
+        if (dotIdx > 0 &&
+            name.Length - dotIdx <= 8 && // sanity: real extensions are short
+            MemoryExtensions.Equals(
+                name.AsSpan(0, dotIdx), query.AsSpan(), StringComparison.OrdinalIgnoreCase))
             return 95;
 
-        if (nameLower.StartsWith(queryLower, StringComparison.Ordinal))
+        if (name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
             return 80;
 
-        if (nameLower.Contains(queryLower, StringComparison.Ordinal))
+        if (name.Contains(query, StringComparison.OrdinalIgnoreCase))
             return 60;
 
         return 0;
     }
 
-    private void SearchContents(string queryLower, List<SearchResult> results, CancellationToken ct)
+    private void SearchContents(string query, List<SearchResult> results, CancellationToken ct)
     {
         var textExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -198,6 +202,8 @@ public sealed class SearchEngine
         };
 
         var existingIndices = new HashSet<int>(results.Select(r => r.EntryIndex));
+        // SearchBySize-style content scan still benefits from a snapshot
+        // because Parallel.ForEach partitions work across threads.
         var snapshot = _index.GetSnapshot(DriveFilter);
 
         Parallel.ForEach(snapshot,
@@ -227,7 +233,7 @@ public sealed class SearchEngine
                     while ((line = reader.ReadLine()) != null)
                     {
                         ct.ThrowIfCancellationRequested();
-                        if (line.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                        if (line.Contains(query, StringComparison.OrdinalIgnoreCase))
                         {
                             lock (results)
                             {

@@ -126,6 +126,38 @@ public sealed class FileIndex
         }
     }
 
+    // Readonly delegate-based scan — no per-keystroke allocation of a snapshot
+    // list (which at 3M entries was ~100 MB of tuples allocated per search and
+    // was the main cause of UI jank). The lock is held for the full iteration,
+    // which briefly blocks writes during an active indexing pass — acceptable
+    // because search is rare during a full reindex and fast-completing.
+    //
+    // The action receives (index, name, isDirectory, storedSize) for each
+    // entry that matches the optional drive filter. Returning false from the
+    // action stops the scan.
+    public void ScanForSearch(string? driveFilter, CancellationToken ct, Func<int, string, bool, long, bool> action)
+    {
+        lock (_lock)
+        {
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                if (ct.IsCancellationRequested) return;
+                var e = _entries[i];
+                if (driveFilter != null)
+                {
+                    string root = e.DriveRoot.Length > 0 ? e.DriveRoot : e.CachedDirectory ?? "";
+                    if (!root.StartsWith(driveFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+                if (!action(i, e.Name, e.IsDirectory, e.Size))
+                    return;
+            }
+        }
+    }
+
+    // Kept for SearchBySize's Parallel.ForEach which benefits from a
+    // materialised snapshot to partition work across threads. Name + size
+    // searches use ScanForSearch instead.
     public List<(int Index, string Name, bool IsDirectory, long Size)> GetSnapshot(string? driveFilter = null)
     {
         lock (_lock)
@@ -136,7 +168,6 @@ public sealed class FileIndex
                 var e = _entries[i];
                 if (driveFilter != null)
                 {
-                    // MFT entries have DriveRoot, fallback entries have CachedDirectory
                     string root = e.DriveRoot.Length > 0 ? e.DriveRoot : e.CachedDirectory ?? "";
                     if (!root.StartsWith(driveFilter, StringComparison.OrdinalIgnoreCase))
                         continue;
