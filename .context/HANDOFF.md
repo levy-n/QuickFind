@@ -20,6 +20,13 @@ QuickFind - Lightweight fast file search tool for Windows. System tray app with 
 - [x] Build + publish succeeds (~150MB self-contained EXE)
 - [x] Professional README and MIT license
 
+## Completed this session (feature/production-readiness) — Pass 3
+- [x] **USN Journal — Incremental Index Updates** — new `Core/UsnWatcher.cs`. One background thread per NTFS drive polls `FSCTL_READ_USN_JOURNAL` every 5 s with `ReturnOnlyOnClose=1` and applies creates / renames / deletes to the in-memory index. Cursor (JournalID + NextUsn) is persisted per drive to `%LOCALAPPDATA%\QuickFind\usn.state`. Admin-only — skips silently on non-elevated launches.
+- [x] **FileIndex mutations** — `UsnAddOrUpdate(driveRoot, frn, parentFrn, name, isDir)` and `UsnRemove(driveRoot, frn)`. Removes are tombstoned (zero-length name) so existing integer indices held by search snapshots remain valid; tombstones are filtered in `ScanForSearch`.
+- [x] **NativeMethods** — added `FSCTL_QUERY_USN_JOURNAL` / `FSCTL_READ_USN_JOURNAL` constants, `USN_JOURNAL_DATA_V0` / `READ_USN_JOURNAL_DATA_V0` structs, two additional `DeviceIoControl` P/Invoke overloads, USN reason flags.
+- [x] **App lifecycle** — USN watcher starts after initial index load, stops before any reindex, restarts after successful reindex, disposes on `ExitApp`.
+- [x] **Build + publish verified** — 0 warnings, 0 errors.
+
 ## Completed this session (feature/production-readiness) — Pass 2
 - [x] **Search hot-path allocation fix** — `FileIndex.ScanForSearch` streams entries without materialising a 100 MB snapshot of tuples per keystroke. `ScoreName` uses `OrdinalIgnoreCase` so no per-entry lowercase copy is allocated. Net effect: searches on large indexes no longer trigger a GC storm.
 - [x] **Named-Pipe single-instance signaling** — new `Core/SingleInstance.cs`. A second launch of QuickFind connects to pipe `QuickFind_SingleInstance_Pipe`, sends `SHOW`, and the running instance pops its search window. Falls back to silent exit if the pipe connect fails.

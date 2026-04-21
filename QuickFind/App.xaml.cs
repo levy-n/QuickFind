@@ -24,6 +24,7 @@ public partial class App : Application
     private FileIndex _index = new();
     private CancellationTokenSource _indexCts = new();
     private CancellationTokenSource _pipeCts = new();
+    private UsnWatcher? _usnWatcher;
 
     private const string TaskbarSearchKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Search";
     private const string TaskbarSearchValue = "SearchboxTaskbarMode";
@@ -505,10 +506,40 @@ public partial class App : Application
         {
             _searchWindow?.UpdateStatus();
             ShowBalloon("Index loaded", $"{_index.Count:N0} files ready");
+            StartUsnWatcher();
             return;
         }
-        // Index too small or missing — re-index
+        // Index too small or missing — re-index. ReindexAsync itself
+        // restarts the watcher on success; no need to start it here.
         await ReindexAsync();
+    }
+
+    // USN watcher picks up creates / renames / deletes live once the
+    // initial index is in place. Admin-only: on non-admin launches the
+    // FSCTL_QUERY_USN_JOURNAL call fails and the watcher exits quietly.
+    private void StartUsnWatcher()
+    {
+        if (!IsElevated())
+        {
+            Logger.Info("UsnWatcher: skipped (not elevated)");
+            return;
+        }
+        try
+        {
+            _usnWatcher?.Dispose();
+            _usnWatcher = new UsnWatcher(
+                _index,
+                onChange: () => Dispatcher.BeginInvoke(() => _searchWindow?.UpdateStatus()));
+            var drives = DriveDetector.GetFixedNtfsDrives()
+                .Select(d => d.RootDirectory.FullName)
+                .ToList();
+            _usnWatcher.Start(drives);
+            Logger.Info($"UsnWatcher: watching {drives.Count} drive(s)");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn("StartUsnWatcher failed", ex);
+        }
     }
 
     private async Task ReindexAsync()
@@ -517,6 +548,11 @@ public partial class App : Application
         _indexCts.Dispose();
         _indexCts = new CancellationTokenSource();
         var ct = _indexCts.Token;
+
+        // Stop the USN watcher while we rebuild — its cursor references
+        // the previous index. StartUsnWatcher is called again afterwards.
+        _usnWatcher?.Dispose();
+        _usnWatcher = null;
 
         _index.Clear();
 
@@ -554,6 +590,7 @@ public partial class App : Application
             string modeStr = anyMft ? "MFT" : "standard";
             ShowBalloon("Indexing complete",
                 $"{_index.Count:N0} files indexed ({modeStr} mode)");
+            StartUsnWatcher();
         }
     }
 
@@ -587,6 +624,7 @@ public partial class App : Application
         Logger.Info("ExitApp invoked");
         _indexCts.Cancel();
         _pipeCts.Cancel();
+        _usnWatcher?.Dispose();
         IndexPersistence.Save(_index);
 
         _notifyIcon?.Dispose();

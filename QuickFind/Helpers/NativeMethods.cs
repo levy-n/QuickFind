@@ -11,8 +11,18 @@ internal static class NativeMethods
     public const uint FILE_SHARE_WRITE = 0x00000002;
     public const uint OPEN_EXISTING = 3;
     public const uint FSCTL_ENUM_USN_DATA = 0x000900B3;
+    public const uint FSCTL_QUERY_USN_JOURNAL = 0x000900F4;
+    public const uint FSCTL_READ_USN_JOURNAL = 0x000900BB;
     public const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
     public const ulong FRN_MASK = 0x0000FFFFFFFFFFFF;
+
+    // USN change reasons — see FILE_NOTIFY_CHANGE_* equivalent. We filter
+    // on CLOSE so we only see finalized changes (one record per file life).
+    public const uint USN_REASON_FILE_CREATE      = 0x00000100;
+    public const uint USN_REASON_FILE_DELETE      = 0x00000200;
+    public const uint USN_REASON_RENAME_NEW_NAME  = 0x00002000;
+    public const uint USN_REASON_RENAME_OLD_NAME  = 0x00001000;
+    public const uint USN_REASON_CLOSE            = 0x80000000;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MFT_ENUM_DATA_V0
@@ -20,6 +30,33 @@ internal static class NativeMethods
         public ulong StartFileReferenceNumber;
         public long LowUsn;
         public long HighUsn;
+    }
+
+    // Output of FSCTL_QUERY_USN_JOURNAL — tells us the current USN cursor
+    // position and the journal identity (changes if the journal is deleted
+    // and recreated, which forces a full reindex).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct USN_JOURNAL_DATA_V0
+    {
+        public ulong UsnJournalID;
+        public long FirstUsn;
+        public long NextUsn;
+        public long LowestValidUsn;
+        public long MaxUsn;
+        public ulong MaximumSize;
+        public ulong AllocationDelta;
+    }
+
+    // Input to FSCTL_READ_USN_JOURNAL.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct READ_USN_JOURNAL_DATA_V0
+    {
+        public long StartUsn;
+        public uint ReasonMask;
+        public uint ReturnOnlyOnClose;
+        public ulong Timeout;
+        public ulong BytesToWaitFor;
+        public ulong UsnJournalID;
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -37,6 +74,28 @@ internal static class NativeMethods
         SafeFileHandle hDevice,
         uint dwIoControlCode,
         ref MFT_ENUM_DATA_V0 lpInBuffer,
+        int nInBufferSize,
+        IntPtr lpOutBuffer,
+        int nOutBufferSize,
+        out int lpBytesReturned,
+        IntPtr lpOverlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool DeviceIoControl(
+        SafeFileHandle hDevice,
+        uint dwIoControlCode,
+        IntPtr lpInBuffer,
+        int nInBufferSize,
+        out USN_JOURNAL_DATA_V0 lpOutBuffer,
+        int nOutBufferSize,
+        out int lpBytesReturned,
+        IntPtr lpOverlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool DeviceIoControl(
+        SafeFileHandle hDevice,
+        uint dwIoControlCode,
+        ref READ_USN_JOURNAL_DATA_V0 lpInBuffer,
         int nInBufferSize,
         IntPtr lpOutBuffer,
         int nOutBufferSize,

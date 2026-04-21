@@ -9,10 +9,9 @@ Tasks are ordered roughly **hardest to easiest**. Check off items as they're com
 
 ### Architecture & Correctness
 
-- [ ] **USN Journal — Incremental Index Updates**
-  New / renamed / deleted files must appear automatically without a full re-index.
-  Implement `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL` with a persistent cursor per drive.
-  *Files:* new `Core/UsnWatcher.cs`, wire into `App.xaml.cs` after initial index completes.
+- [x] **USN Journal — Incremental Index Updates**
+  Background per-drive watchers (polling every 5 s) read the NTFS change journal via `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL` and apply create/rename/delete records to the in-memory index. Cursor (journal ID + NextUsn per drive) is persisted to `%LOCALAPPDATA%\QuickFind\usn.state` so updates survive restarts. Journal-rollover detection falls back to the current journal tail (avoids stale cursors causing a crash). Admin-only — no-op on non-elevated launches.
+  *Files:* new `Core/UsnWatcher.cs`, `Core/FileIndex.cs` (`UsnAddOrUpdate`, `UsnRemove`, tombstone-skipping), `Helpers/NativeMethods.cs` (new structs + DeviceIoControl overloads), `App.xaml.cs` (start after initial index, restart on reindex, dispose on exit).
 
 - [ ] **File Sizes from MFT directly (no per-entry I/O)**
   Currently `MftIndexer` stores `size = 0`. Size searches (`>1GB` etc.) then hit disk once per file via `ResolveSizeSafe` — unusable on 3 M files.

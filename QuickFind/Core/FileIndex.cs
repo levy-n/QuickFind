@@ -143,6 +143,7 @@ public sealed class FileIndex
             {
                 if (ct.IsCancellationRequested) return;
                 var e = _entries[i];
+                if (e.Name.Length == 0) continue; // tombstoned (USN delete)
                 if (driveFilter != null)
                 {
                     string root = e.DriveRoot.Length > 0 ? e.DriveRoot : e.CachedDirectory ?? "";
@@ -202,6 +203,56 @@ public sealed class FileIndex
             if ((uint)entryIndex >= (uint)_entries.Count)
                 return 0;
             return _entries[entryIndex].Size;
+        }
+    }
+
+    // ── USN journal mutations ─────────────────────────────────────────
+    //
+    // USN applies one record per file close. We treat journal updates
+    // idempotently: AddOrUpdate creates or overwrites by (drive, FRN),
+    // Remove drops the entry. Because FileIndex is append-only and
+    // callers reference entries by integer index, "remove" doesn't shrink
+    // _entries — it marks the entry as tombstoned (zero name) so indices
+    // stay valid. Tombstones are skipped during search.
+
+    public void UsnAddOrUpdate(string driveRoot, ulong frn, ulong parentFrn, string name, bool isDirectory)
+    {
+        if (string.IsNullOrEmpty(name)) return;
+        lock (_lock)
+        {
+            if (!_frnMaps.TryGetValue(driveRoot, out var map))
+            {
+                map = new Dictionary<ulong, int>();
+                _frnMaps[driveRoot] = map;
+            }
+
+            if (map.TryGetValue(frn, out int existingIdx) && (uint)existingIdx < (uint)_entries.Count)
+            {
+                // Update in place — rename or move.
+                var old = _entries[existingIdx];
+                _entries[existingIdx] = new FileEntry(name, driveRoot, parentFrn, isDirectory, old.CachedDirectory, old.Size);
+            }
+            else
+            {
+                int idx = _entries.Count;
+                _entries.Add(new FileEntry(name, driveRoot, parentFrn, isDirectory, null, 0));
+                map[frn] = idx;
+            }
+        }
+    }
+
+    public void UsnRemove(string driveRoot, ulong frn)
+    {
+        lock (_lock)
+        {
+            if (!_frnMaps.TryGetValue(driveRoot, out var map)) return;
+            if (!map.TryGetValue(frn, out int idx)) return;
+            if ((uint)idx >= (uint)_entries.Count) return;
+
+            // Tombstone: zero-length name will be filtered out during search.
+            var old = _entries[idx];
+            _entries[idx] = new FileEntry(string.Empty, old.DriveRoot, old.ParentFrn, old.IsDirectory, old.CachedDirectory, 0);
+            map.Remove(frn);
         }
     }
 
